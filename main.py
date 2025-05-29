@@ -3,53 +3,67 @@ from datetime import datetime
 from tabulate import tabulate
 import io
 import smtplib
-import os
-import requests 
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import sys
+import requests
+from io import StringIO
+import os
 
 # === Config ===
 WATCHLIST_FILES = {
-    "Small Cap": "smallcap_watchlist.csv",
-    "Large Cap": "largecap_watchlist.csv"
+    "Large Cap": "largecap_watchlist.csv",
+    "Small Cap": "smallcap_watchlist.csv"
 }
 
 BULK_URL = "https://archives.nseindia.com/content/equities/bulk.csv"
 BLOCK_URL = "https://archives.nseindia.com/content/equities/block.csv"
 
-# Read from environment variables (GitHub Actions Secrets)
-EMAIL_FROM = os.environ.get("EMAIL_FROM")
-EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
-EMAIL_TO = os.environ.get("EMAIL_TO")  # Comma-separated string of emails
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
+# Email Config from environment variables (with defaults)
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+EMAIL_FROM = os.getenv("EMAIL_FROM")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_TO = os.getenv("EMAIL_TO")  # can be comma-separated for multiple recipients
+
+if not all([EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO]):
+    print("[❌] ERROR: Please set EMAIL_FROM, EMAIL_PASSWORD, and EMAIL_TO environment variables.")
+    sys.exit(1)
 
 EMAIL_SUBJECT = f"Mutual Fund Deal Tracker Report - {datetime.today().date()}"
 
 today_str = datetime.today().strftime("%d-%b-%Y").upper()
 
 
+def fetch_nse_csv_with_session(url):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/114.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Referer": "https://www.nseindia.com/"
+    }
+
+    with requests.Session() as session:
+        session.get("https://www.nseindia.com", headers=headers, timeout=5)
+        response = session.get(url, headers=headers, timeout=5)
+        response.raise_for_status()
+
+        df = pd.read_csv(StringIO(response.text))
+        return df
+
+
 def load_watchlist(file):
     df = pd.read_csv(file)
     return set(df["Symbol"].str.upper())
 
+
 def process_deals(csv_url, deal_type, watchlist_name, watchlist_symbols, output_io):
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/114.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive"
-        }
-        response = requests.get(csv_url, headers=headers)
-        response.raise_for_status()  # raise HTTPError for bad responses
+        df = fetch_nse_csv_with_session(csv_url)
 
-        # Read CSV from response text
-        from io import StringIO
-        df = pd.read_csv(StringIO(response.text))
-        
         df.columns = [col.strip() for col in df.columns]
         df["Date"] = df["Date"].str.strip().str.upper()
         df_today = df[df["Date"] == today_str]
@@ -90,7 +104,6 @@ def generate_report():
 
     for category, file in WATCHLIST_FILES.items():
         symbols = load_watchlist(file)
-
         process_deals(BULK_URL, "Bulk", category, symbols, output_io)
         process_deals(BLOCK_URL, "Block", category, symbols, output_io)
 
@@ -99,24 +112,21 @@ def generate_report():
     return report
 
 
-def send_email(subject, body, from_addr, to_addr_str, smtp_server, smtp_port, login, password):
-    # Parse recipients string into list
-    to_addrs = [email.strip() for email in to_addr_str.split(",")]
-
-    msg = MIMEMultipart("alternative")
+def send_email(subject, body, from_addr, to_addrs, smtp_server, smtp_port, login, password):
+    msg = MIMEMultipart()
     msg["From"] = from_addr
-    msg["To"] = ", ".join(to_addrs)
+    msg["To"] = to_addrs
     msg["Subject"] = subject
 
-    # Format body as HTML preformatted text
-    html_body = "<pre style='font-family: monospace; font-size: 14px'>" + body + "</pre>"
-    msg.attach(MIMEText(html_body, "html"))
+    msg.attach(MIMEText(body, "html"))
 
     try:
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()
         server.login(login, password)
-        server.sendmail(from_addr, to_addrs, msg.as_string())
+        # to_addrs can be comma-separated string; convert to list
+        recipient_list = [addr.strip() for addr in to_addrs.split(",")]
+        server.sendmail(from_addr, recipient_list, msg.as_string())
         server.quit()
         print("✅ Email sent successfully.")
     except Exception as e:
@@ -124,19 +134,14 @@ def send_email(subject, body, from_addr, to_addr_str, smtp_server, smtp_port, lo
 
 
 if __name__ == "__main__":
-    report_text = generate_report()
-
-    # Send the email if all env vars are present
-    if EMAIL_FROM and EMAIL_PASSWORD and EMAIL_TO:
-        send_email(
-            EMAIL_SUBJECT,
-            report_text,
-            EMAIL_FROM,
-            EMAIL_TO,
-            SMTP_SERVER,
-            SMTP_PORT,
-            EMAIL_FROM,
-            EMAIL_PASSWORD
-        )
-    else:
-        print("[❌] Missing environment variables for email configuration.")
+    report_html = generate_report()
+    send_email(
+        EMAIL_SUBJECT,
+        report_html,
+        EMAIL_FROM,
+        EMAIL_TO,
+        SMTP_SERVER,
+        SMTP_PORT,
+        EMAIL_FROM,
+        EMAIL_PASSWORD
+    )
