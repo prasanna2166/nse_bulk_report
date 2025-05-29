@@ -4,6 +4,7 @@ from tabulate import tabulate
 import io
 import smtplib
 import os
+import requests 
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
