@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 # === Config ===
 WATCHLIST_FILES = {
     "Small Cap": "smallcap_watchlist.csv"
-    "Large Cap": "largecap_watchlist.csv" 
+    "Large Cap": "largecap_watchlist.csv"
 }
 
 BULK_URL = "https://archives.nseindia.com/content/equities/bulk.csv"
@@ -19,7 +19,7 @@ BLOCK_URL = "https://archives.nseindia.com/content/equities/block.csv"
 # Read from environment variables (GitHub Actions Secrets)
 EMAIL_FROM = os.environ.get("EMAIL_FROM")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
-EMAIL_TO = os.environ.get("EMAIL_TO")
+EMAIL_TO = os.environ.get("EMAIL_TO")  # Comma-separated string of emails
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
@@ -85,13 +85,16 @@ def generate_report():
     return report
 
 
-def send_email(subject, body, from_addr, to_addr, smtp_server, smtp_port, login, password):
+def send_email(subject, body, from_addr, to_addr_str, smtp_server, smtp_port, login, password):
+    # Parse recipients string into list
+    to_addrs = [email.strip() for email in to_addr_str.split(",")]
+
     msg = MIMEMultipart("alternative")
     msg["From"] = from_addr
-    msg["To"] = to_addr
+    msg["To"] = ", ".join(to_addrs)
     msg["Subject"] = subject
 
-    # Convert plain text to HTML-friendly version
+    # Format body as HTML preformatted text
     html_body = "<pre style='font-family: monospace; font-size: 14px'>" + body + "</pre>"
     msg.attach(MIMEText(html_body, "html"))
 
@@ -99,7 +102,7 @@ def send_email(subject, body, from_addr, to_addr, smtp_server, smtp_port, login,
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()
         server.login(login, password)
-        server.sendmail(from_addr, to_addr, msg.as_string())
+        server.sendmail(from_addr, to_addrs, msg.as_string())
         server.quit()
         print("✅ Email sent successfully.")
     except Exception as e:
@@ -109,7 +112,7 @@ def send_email(subject, body, from_addr, to_addr, smtp_server, smtp_port, login,
 if __name__ == "__main__":
     report_text = generate_report()
 
-    # Send the email
+    # Send the email if all env vars are present
     if EMAIL_FROM and EMAIL_PASSWORD and EMAIL_TO:
         send_email(
             EMAIL_SUBJECT,
