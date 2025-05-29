@@ -32,10 +32,23 @@ def load_watchlist(file):
     df = pd.read_csv(file)
     return set(df["Symbol"].str.upper())
 
-
 def process_deals(csv_url, deal_type, watchlist_name, watchlist_symbols, output_io):
     try:
-        df = pd.read_csv(csv_url)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/114.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive"
+        }
+        response = requests.get(csv_url, headers=headers)
+        response.raise_for_status()  # raise HTTPError for bad responses
+
+        # Read CSV from response text
+        from io import StringIO
+        df = pd.read_csv(StringIO(response.text))
+        
         df.columns = [col.strip() for col in df.columns]
         df["Date"] = df["Date"].str.strip().str.upper()
         df_today = df[df["Date"] == today_str]
