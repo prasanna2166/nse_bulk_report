@@ -9,7 +9,7 @@ from email.mime.multipart import MIMEMultipart
 
 # === Config ===
 WATCHLIST_FILES = {
-    "Small Cap": "smallcap_watchlist.csv"
+    "Small Cap": "smallcap_watchlist.csv",
     "Large Cap": "largecap_watchlist.csv"
 }
 
