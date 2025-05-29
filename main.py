@@ -5,10 +5,9 @@ import io
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import sys
+import os
 import requests
 from io import StringIO
-import os
 
 # === Config ===
 WATCHLIST_FILES = {
@@ -19,19 +18,14 @@ WATCHLIST_FILES = {
 BULK_URL = "https://archives.nseindia.com/content/equities/bulk.csv"
 BLOCK_URL = "https://archives.nseindia.com/content/equities/block.csv"
 
-# Email Config from environment variables (with defaults)
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+# Get secrets from environment
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-EMAIL_TO = os.getenv("EMAIL_TO")  # can be comma-separated for multiple recipients
-
-if not all([EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO]):
-    print("[❌] ERROR: Please set EMAIL_FROM, EMAIL_PASSWORD, and EMAIL_TO environment variables.")
-    sys.exit(1)
+EMAIL_TO = os.getenv("EMAIL_TO")
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 
 EMAIL_SUBJECT = f"Mutual Fund Deal Tracker Report - {datetime.today().date()}"
-
 today_str = datetime.today().strftime("%d-%b-%Y").upper()
 
 
@@ -42,17 +36,18 @@ def fetch_nse_csv_with_session(url):
                       "Chrome/114.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://www.nseindia.com",
         "Connection": "keep-alive",
-        "Referer": "https://www.nseindia.com/"
     }
 
     with requests.Session() as session:
-        session.get("https://www.nseindia.com", headers=headers, timeout=5)
-        response = session.get(url, headers=headers, timeout=5)
-        response.raise_for_status()
+        # Step 1: Visit homepage to establish cookies
+        session.get("https://www.nseindia.com", headers=headers, timeout=10)
 
-        df = pd.read_csv(StringIO(response.text))
-        return df
+        # Step 2: Get CSV
+        response = session.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        return pd.read_csv(StringIO(response.text))
 
 
 def load_watchlist(file):
@@ -63,7 +58,6 @@ def load_watchlist(file):
 def process_deals(csv_url, deal_type, watchlist_name, watchlist_symbols, output_io):
     try:
         df = fetch_nse_csv_with_session(csv_url)
-
         df.columns = [col.strip() for col in df.columns]
         df["Date"] = df["Date"].str.strip().str.upper()
         df_today = df[df["Date"] == today_str]
@@ -115,18 +109,16 @@ def generate_report():
 def send_email(subject, body, from_addr, to_addrs, smtp_server, smtp_port, login, password):
     msg = MIMEMultipart()
     msg["From"] = from_addr
-    msg["To"] = to_addrs
+    msg["To"] = ", ".join(to_addrs)
     msg["Subject"] = subject
 
-    msg.attach(MIMEText(body, "html"))
+    msg.attach(MIMEText(body, "plain"))
 
     try:
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()
         server.login(login, password)
-        # to_addrs can be comma-separated string; convert to list
-        recipient_list = [addr.strip() for addr in to_addrs.split(",")]
-        server.sendmail(from_addr, recipient_list, msg.as_string())
+        server.sendmail(from_addr, to_addrs, msg.as_string())
         server.quit()
         print("✅ Email sent successfully.")
     except Exception as e:
@@ -134,12 +126,14 @@ def send_email(subject, body, from_addr, to_addrs, smtp_server, smtp_port, login
 
 
 if __name__ == "__main__":
-    report_html = generate_report()
+    report_text = generate_report()
+
+    recipients = [email.strip() for email in EMAIL_TO.split(",")]
     send_email(
         EMAIL_SUBJECT,
-        report_html,
+        report_text,
         EMAIL_FROM,
-        EMAIL_TO,
+        recipients,
         SMTP_SERVER,
         SMTP_PORT,
         EMAIL_FROM,
